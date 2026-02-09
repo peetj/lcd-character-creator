@@ -123,6 +123,28 @@ a{ color: inherit; }
 
 .grid-wrap{ display:flex; align-items:center; justify-content:center; padding: 6px 0 14px; }
 
+.editor-row{ display:flex; align-items:center; justify-content:center; gap: 12px; }
+.toolstrip{ display:flex; flex-direction:column; gap: 10px; }
+.iconbtn{
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.04);
+  color: var(--text);
+  cursor: pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size: 18px;
+  line-height: 1;
+  user-select:none;
+  transition: transform .05s ease, background .15s ease, border-color .15s ease;
+}
+.iconbtn:hover{ background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.18); }
+.iconbtn:active{ transform: translateY(1px); }
+.iconbtn:disabled{ opacity: .5; cursor: not-allowed; }
+
 .lcd-frame{
   background: radial-gradient(120px 100px at 25% 20%, rgba(255,255,255,.10), transparent 60%),
               linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.22));

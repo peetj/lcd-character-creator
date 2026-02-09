@@ -320,20 +320,6 @@ export function App() {
           <div className="title">LCD Character Creator</div>
           <div className="subtitle">5×8 · Arduino code (hd44780) · Share link</div>
         </div>
-        <div className="top-actions">
-          <button className="btn" onClick={undo} disabled={history.past.length === 0}>
-            Undo
-          </button>
-          <button className="btn" onClick={redo} disabled={history.future.length === 0}>
-            Redo
-          </button>
-          <button className="btn" onClick={clear}>
-            Clear
-          </button>
-          <button className="btn" onClick={invert}>
-            Invert
-          </button>
-        </div>
       </header>
 
       <main className="layout">
@@ -341,21 +327,52 @@ export function App() {
           <div className="card-title">Draw</div>
 
           <div className="grid-wrap" role="application" aria-label="Pixel editor">
-            <div className="lcd-frame">
-              <div className="pixel-grid" style={{ gridTemplateColumns: `repeat(${COLS}, 1fr)` }}>
-                {grid.map((row, r) =>
-                  row.map((on, c) => (
-                    <button
-                      key={`${r}-${c}`}
-                      type="button"
-                      className={`px ${on ? 'on' : 'off'}`}
-                      aria-pressed={on}
-                      aria-label={`Row ${r + 1}, Col ${c + 1}: ${on ? 'on' : 'off'}`}
-                      onPointerDown={() => handlePointerDown(r, c)}
-                      onPointerEnter={() => handlePointerEnter(r, c)}
-                    />
-                  )),
-                )}
+            <div className="editor-row">
+              <div className="toolstrip" aria-label="Edit tools">
+                <button
+                  type="button"
+                  className="iconbtn"
+                  onClick={undo}
+                  disabled={history.past.length === 0}
+                  aria-label="Undo"
+                  title="Undo"
+                >
+                  ↶
+                </button>
+                <button
+                  type="button"
+                  className="iconbtn"
+                  onClick={redo}
+                  disabled={history.future.length === 0}
+                  aria-label="Redo"
+                  title="Redo"
+                >
+                  ↷
+                </button>
+                <button type="button" className="iconbtn" onClick={clear} aria-label="Clear" title="Clear">
+                  ⊘
+                </button>
+                <button type="button" className="iconbtn" onClick={invert} aria-label="Invert" title="Invert">
+                  ◧
+                </button>
+              </div>
+
+              <div className="lcd-frame">
+                <div className="pixel-grid" style={{ gridTemplateColumns: `repeat(${COLS}, 1fr)` }}>
+                  {grid.map((row, r) =>
+                    row.map((on, c) => (
+                      <button
+                        key={`${r}-${c}`}
+                        type="button"
+                        className={`px ${on ? 'on' : 'off'}`}
+                        aria-pressed={on}
+                        aria-label={`Row ${r + 1}, Col ${c + 1}: ${on ? 'on' : 'off'}`}
+                        onPointerDown={() => handlePointerDown(r, c)}
+                        onPointerEnter={() => handlePointerEnter(r, c)}
+                      />
+                    )),
+                  )}
+                </div>
               </div>
             </div>
           </div>
