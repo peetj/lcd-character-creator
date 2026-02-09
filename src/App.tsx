@@ -2,18 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 type Interfacing = 'parallel' | 'i2c'
 type DataType = 'bin' | 'hex'
-type LcdColor = 'green' | 'blue'
-
-type SaveItem = {
-  id: string
-  name: string
-  rows: number[] // 8 rows, each 0..31
-  color: LcdColor
-  interfacing: Interfacing
-  datatype: DataType
-  createdAt: number
-  updatedAt: number
-}
+type LcdColor = 'green' | 'blue' | 'amber' | 'white' | 'red'
 
 type History<T> = { past: T[]; present: T; future: T[] }
 
@@ -80,9 +69,18 @@ function rowsToHexStrings(rows: number[]): string[] {
 function buildArduinoCode(rows: number[], interfacing: Interfacing, datatype: DataType) {
   const lines = datatype === 'hex' ? rowsToHexStrings(rows) : rowsToBinaryStrings(rows)
 
-  const templateParallel = `#include <LiquidCrystal.h>
+  const templateParallel = `#include <hd44780.h>
+#include <hd44780ioClass/hd44780_pinIO.h>
 
-LiquidCrystal lcd(12, 11, 5, 4, 3, 2); // RS, E, D4, D5, D6, D7
+// Pin wiring: RS, EN, D4, D5, D6, D7
+const int LCD_RS = 12;
+const int LCD_EN = 11;
+const int LCD_D4 = 5;
+const int LCD_D5 = 4;
+const int LCD_D6 = 3;
+const int LCD_D7 = 2;
+
+hd44780_pinIO lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 byte customChar[] = {
   {DataX0},
@@ -96,20 +94,27 @@ byte customChar[] = {
 };
 
 void setup() {
-  lcd.begin(16, 2);
+  int status = lcd.begin(16, 2);
+  if (status) {
+    // If you want error details, see: https://github.com/duinoWitchery/hd44780
+    // status = lcd.status();
+  }
+
   lcd.createChar(0, customChar);
+  lcd.clear();
   lcd.home();
-  lcd.write(0);
+  lcd.write((uint8_t)0);
 }
 
 void loop() { }
 `
 
-  const templateI2c = `#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+  const templateI2c = `#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
 
-// Set the LCD address to 0x27 in PCF8574 by NXP and Set to 0x3F in PCF8574A by Ti
-LiquidCrystal_I2C lcd(0x3F, 16, 2);
+// Uses the hd44780 "I2Cexp" i/o class for PCF8574 backpacks.
+// It can auto-detect the I2C address and the pin mapping on most modules.
+hd44780_I2Cexp lcd;
 
 byte customChar[] = {
   {DataX0},
@@ -123,10 +128,16 @@ byte customChar[] = {
 };
 
 void setup() {
-  lcd.begin();
+  int status = lcd.begin(16, 2);
+  if (status) {
+    // If you want error details, see: https://github.com/duinoWitchery/hd44780
+    // status = lcd.status();
+  }
+
   lcd.createChar(0, customChar);
+  lcd.clear();
   lcd.home();
-  lcd.write(0);
+  lcd.write((uint8_t)0);
 }
 
 void loop() { }
@@ -137,33 +148,8 @@ void loop() { }
   return code.trimEnd()
 }
 
-function makeId() {
-  return Math.random().toString(16).slice(2) + Date.now().toString(16)
-}
-
-function loadSaves(): SaveItem[] {
-  try {
-    const raw = localStorage.getItem('lcdcc:saves')
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as SaveItem[]
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((x) => x && Array.isArray(x.rows) && x.rows.length === ROWS)
-      .map((x) => ({
-        ...x,
-        rows: x.rows.map((v) => clampRowValue(v)),
-      }))
-  } catch {
-    return []
-  }
-}
-
-function persistSaves(items: SaveItem[]) {
-  localStorage.setItem('lcdcc:saves', JSON.stringify(items))
-}
-
-function downloadText(filename: string, text: string) {
-  const blob = new Blob([text], { type: 'application/json;charset=utf-8' })
+function downloadFile(filename: string, text: string, mimeType: string) {
+  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -174,9 +160,22 @@ function downloadText(filename: string, text: string) {
   URL.revokeObjectURL(url)
 }
 
+function lcdColorValues(): LcdColor[] {
+  return ['green', 'blue', 'amber', 'white', 'red']
+}
+
+function isLcdColor(x: any): x is LcdColor {
+  return lcdColorValues().includes(x)
+}
+
 export function App() {
+  // 1) Default LCD color to Green
   const [color, setColor] = useState<LcdColor>('green')
-  const [interfacing, setInterfacing] = useState<Interfacing>('parallel')
+
+  // 2) Default interfacing to I2C
+  const [interfacing, setInterfacing] = useState<Interfacing>('i2c')
+
+  // 3) Default data type to Binary
   const [datatype, setDatatype] = useState<DataType>('bin')
 
   const [history, setHistory] = useState<History<number[]>>({
@@ -184,9 +183,6 @@ export function App() {
     present: emptyRows(),
     future: [],
   })
-
-  const [saves, setSaves] = useState<SaveItem[]>([])
-  const [selectedSaveId, setSelectedSaveId] = useState<string>('')
 
   const grid = useMemo(() => rowsToGrid(history.present), [history.present])
   const code = useMemo(
@@ -258,17 +254,21 @@ export function App() {
     await navigator.clipboard.writeText(code)
   }
 
-  function currentShareUrl() {
-    const url = new URL(window.location.href)
-    url.searchParams.set('r', encodeRowsBase32(history.present))
-    url.searchParams.set('c', color)
-    url.searchParams.set('i', interfacing)
-    url.searchParams.set('t', datatype)
-    return url.toString()
+  function downloadCode() {
+    downloadFile('lcd_custom_char.ino', code + '\n', 'text/plain')
   }
 
-  async function copyShareLink() {
-    await navigator.clipboard.writeText(currentShareUrl())
+  function exportCurrent() {
+    const payload = {
+      version: 1,
+      character: {
+        rows: history.present,
+        color,
+        interfacing,
+        datatype,
+      },
+    }
+    downloadFile('lcd-character.json', JSON.stringify(payload, null, 2) + '\n', 'application/json')
   }
 
   function syncUrlFromState() {
@@ -280,17 +280,15 @@ export function App() {
     window.history.replaceState({}, '', url)
   }
 
-  // Load from URL + saved list once.
+  // Load from URL once.
   useEffect(() => {
-    setSaves(loadSaves())
-
     const url = new URL(window.location.href)
     const r = url.searchParams.get('r')
-    const c = url.searchParams.get('c') as LcdColor | null
+    const c = url.searchParams.get('c')
     const i = url.searchParams.get('i') as Interfacing | null
     const t = url.searchParams.get('t') as DataType | null
 
-    if (c === 'green' || c === 'blue') setColor(c)
+    if (isLcdColor(c)) setColor(c)
     if (i === 'parallel' || i === 'i2c') setInterfacing(i)
     if (t === 'bin' || t === 'hex') setDatatype(t)
 
@@ -306,121 +304,13 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history.present, color, interfacing, datatype])
 
-  function saveNew() {
-    const now = Date.now()
-    const item: SaveItem = {
-      id: makeId(),
-      name: `Character ${new Date(now).toLocaleString()}`,
-      rows: [...history.present],
-      color,
-      interfacing,
-      datatype,
-      createdAt: now,
-      updatedAt: now,
-    }
-    const next = [item, ...saves]
-    setSaves(next)
-    setSelectedSaveId(item.id)
-    persistSaves(next)
-  }
-
-  function overwriteSelected() {
-    if (!selectedSaveId) return
-    const now = Date.now()
-    const next = saves.map((s) =>
-      s.id === selectedSaveId
-        ? { ...s, rows: [...history.present], color, interfacing, datatype, updatedAt: now }
-        : s,
-    )
-    setSaves(next)
-    persistSaves(next)
-  }
-
-  function loadSelected() {
-    const item = saves.find((s) => s.id === selectedSaveId)
-    if (!item) return
-    setColor(item.color)
-    setInterfacing(item.interfacing)
-    setDatatype(item.datatype)
-    setHistory({ past: [], present: item.rows.map(clampRowValue), future: [] })
-  }
-
-  function renameSelected(name: string) {
-    if (!selectedSaveId) return
-    const next = saves.map((s) => (s.id === selectedSaveId ? { ...s, name } : s))
-    setSaves(next)
-    persistSaves(next)
-  }
-
-  function deleteSelected() {
-    if (!selectedSaveId) return
-    const next = saves.filter((s) => s.id !== selectedSaveId)
-    setSaves(next)
-    setSelectedSaveId('')
-    persistSaves(next)
-  }
-
-  function exportSaves() {
-    downloadText('lcd-character-saves.json', JSON.stringify({ version: 1, saves }, null, 2))
-  }
-
-  function exportCurrent() {
-    const payload = {
-      version: 1,
-      character: {
-        rows: history.present,
-        color,
-        interfacing,
-        datatype,
-      },
-    }
-    downloadText('lcd-character.json', JSON.stringify(payload, null, 2))
-  }
-
-  function importJsonFile(file: File) {
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const text = String(reader.result ?? '')
-        const parsed = JSON.parse(text) as any
-
-        if (parsed?.saves && Array.isArray(parsed.saves)) {
-          const merged = [...parsed.saves, ...saves]
-            .filter((x: any) => x && Array.isArray(x.rows) && x.rows.length === ROWS)
-            .map((x: any) => ({
-              id: String(x.id ?? makeId()),
-              name: String(x.name ?? 'Imported'),
-              rows: (x.rows as any[]).map((v) => clampRowValue(Number(v))),
-              color: x.color === 'blue' ? 'blue' : 'green',
-              interfacing: x.interfacing === 'i2c' ? 'i2c' : 'parallel',
-              datatype: x.datatype === 'hex' ? 'hex' : 'bin',
-              createdAt: Number(x.createdAt ?? Date.now()),
-              updatedAt: Number(x.updatedAt ?? Date.now()),
-            })) as SaveItem[]
-          setSaves(merged)
-          persistSaves(merged)
-          return
-        }
-
-        if (parsed?.character?.rows && Array.isArray(parsed.character.rows)) {
-          const rows = (parsed.character.rows as any[]).slice(0, ROWS).map((v) => clampRowValue(Number(v)))
-          while (rows.length < ROWS) rows.push(0)
-          const c = parsed.character.color as LcdColor
-          const i = parsed.character.interfacing as Interfacing
-          const t = parsed.character.datatype as DataType
-          if (c === 'green' || c === 'blue') setColor(c)
-          if (i === 'parallel' || i === 'i2c') setInterfacing(i)
-          if (t === 'bin' || t === 'hex') setDatatype(t)
-          setHistory({ past: [], present: rows, future: [] })
-          return
-        }
-
-        throw new Error('Unrecognized JSON shape')
-      } catch (e) {
-        alert(`Import failed: ${(e as Error).message}`)
-      }
-    }
-    reader.readAsText(file)
+  async function copyShareLink() {
+    const url = new URL(window.location.href)
+    url.searchParams.set('r', encodeRowsBase32(history.present))
+    url.searchParams.set('c', color)
+    url.searchParams.set('i', interfacing)
+    url.searchParams.set('t', datatype)
+    await navigator.clipboard.writeText(url.toString())
   }
 
   return (
@@ -428,7 +318,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <div className="title">LCD Character Creator</div>
-          <div className="subtitle">Modern remake (5×8) · Arduino code · Save/Share</div>
+          <div className="subtitle">5×8 · Arduino code (hd44780) · Share link</div>
         </div>
         <div className="top-actions">
           <button className="btn" onClick={undo} disabled={history.past.length === 0}>
@@ -470,9 +360,7 @@ export function App() {
             </div>
           </div>
 
-          <div className="hint">
-            Tip: click-drag to paint. A stroke toggles based on the first pixel you touch.
-          </div>
+          <div className="hint">Tip: click-drag to paint. A stroke toggles based on the first pixel you touch.</div>
 
           <div className="settings">
             <div className="field">
@@ -483,6 +371,15 @@ export function App() {
                 </button>
                 <button className={`segbtn ${color === 'blue' ? 'active' : ''}`} onClick={() => setColor('blue')}>
                   Blue
+                </button>
+                <button className={`segbtn ${color === 'amber' ? 'active' : ''}`} onClick={() => setColor('amber')}>
+                  Amber
+                </button>
+                <button className={`segbtn ${color === 'white' ? 'active' : ''}`} onClick={() => setColor('white')}>
+                  White
+                </button>
+                <button className={`segbtn ${color === 'red' ? 'active' : ''}`} onClick={() => setColor('red')}>
+                  Red
                 </button>
               </div>
             </div>
@@ -534,77 +431,12 @@ export function App() {
             <button className="btn primary" onClick={copyCode}>
               Copy code
             </button>
-            <button className="btn" onClick={exportCurrent}>
-              Export current (.json)
+            <button className="btn" onClick={downloadCode}>
+              Download code (.ino)
             </button>
-          </div>
-        </section>
-
-        <section className="card">
-          <div className="card-title">Saves</div>
-
-          <div className="saves">
-            <div className="row">
-              <select value={selectedSaveId} onChange={(e) => setSelectedSaveId(e.target.value)}>
-                <option value="">Select a save…</option>
-                {saves.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <button className="btn" onClick={loadSelected} disabled={!selectedSaveId}>
-                Load
-              </button>
-            </div>
-
-            <div className="row">
-              <button className="btn" onClick={saveNew}>
-                Save new
-              </button>
-              <button className="btn" onClick={overwriteSelected} disabled={!selectedSaveId}>
-                Overwrite selected
-              </button>
-              <button className="btn danger" onClick={deleteSelected} disabled={!selectedSaveId}>
-                Delete
-              </button>
-            </div>
-
-            <div className="row">
-              <input
-                type="text"
-                placeholder="Rename selected…"
-                value={saves.find((s) => s.id === selectedSaveId)?.name ?? ''}
-                onChange={(e) => renameSelected(e.target.value)}
-                disabled={!selectedSaveId}
-              />
-            </div>
-
-            <div className="row">
-              <button className="btn" onClick={exportSaves} disabled={saves.length === 0}>
-                Export all saves (.json)
-              </button>
-              <label className="btn file">
-                Import .json
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) importJsonFile(f)
-                    e.currentTarget.value = ''
-                  }}
-                />
-              </label>
-            </div>
-
-            <details className="details">
-              <summary>About import/export</summary>
-              <div className="details-body">
-                You can import either a single character export (lcd-character.json) or a full saves export
-                (lcd-character-saves.json). Imported saves are merged into your local list.
-              </div>
-            </details>
+            <button className="btn" onClick={exportCurrent}>
+              Export character (.json)
+            </button>
           </div>
         </section>
 
@@ -617,8 +449,8 @@ export function App() {
               </a>
             </li>
             <li>
-              <a href="https://github.com/fdebrabander/Arduino-LiquidCrystal-I2C-library" target="_blank" rel="noreferrer">
-                LiquidCrystal_I2C library
+              <a href="https://github.com/duinoWitchery/hd44780" target="_blank" rel="noreferrer">
+                hd44780 library (Bill Perry)
               </a>
             </li>
           </ul>
